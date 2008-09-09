@@ -13,6 +13,8 @@
 -behaviour(gen_mod).
 -behaviour(gen_server).
 
+-include("mod_tweet.hrl").
+
 %% gen_mod API
 -export([start_link/2, start/2, stop/1]).
 
@@ -29,13 +31,9 @@
 -include("jlib.hrl").
 -include("ejabberd_http.hrl").
 
--record(state, {host}).
--record(tweet, {id, jid, subject, body, thread, cdate}).
--record(sequence, {key, index}).
+-record(state, {host, db_mod}).
 
 -define(PROCNAME, ?MODULE).
-
--define(ITEMS_PER_PAGE, 10).
 
 %%%----------------------------------------------------------------------
 %%% gen_mod API
@@ -49,18 +47,6 @@ start_link(Host, Opts) ->
     gen_server:start_link({local, Proc}, ?MODULE, [Host, Opts], []).
 
 start(Host, Opts) ->
-    %% create table for all posts
-    mnesia:create_table(tweet,
-        		[{type, set},
-                         {disc_only_copies, [node()]},
-        		 {attributes, record_info(fields, tweet)}]),
-    %% add index to field jid 
-    mnesia:add_table_index(tweet, jid),
-    %% create sequence table
-    mnesia:create_table(sequence, 
-                         [{type, set},
-                          {disc_copies, [node()]},
-                          {attributes, record_info(fields, sequence)}]),
     Proc = gen_mod:get_module_proc(Host, ?PROCNAME),
     ChildSpec =
 	{Proc,
@@ -91,6 +77,8 @@ stop(Host) ->
 %%--------------------------------------------------------------------
 init([Host, Opts]) ->
     MyHost = gen_mod:get_opt(host, Opts, "tweet." ++ Host),
+    Db_Mod = gen_mod:get_opt(db_mod, Opts, mod_tweet_mnesia),
+    Db_Mod:init_db(),
     case catch ets:new(mod_tweet_cfg, [named_table, public]) of
         _ ->
             ok
@@ -101,8 +89,9 @@ init([Host, Opts]) ->
         CssPath ->
             ets:insert(mod_tweet_cfg, {css_path, CssPath})
     end,
+    ets:insert(mod_tweet_cfg, {db_mod, Db_Mod}),
     ejabberd_router:register_route(MyHost),
-    {ok, #state{host = MyHost}}.
+    {ok, #state{host = MyHost, db_mod = Db_Mod}}.
 
 %%--------------------------------------------------------------------
 %% Function: %% handle_call(Request, From, State) -> {reply, Reply, State} |
@@ -133,19 +122,15 @@ handle_cast(_Msg, State) ->
 %%--------------------------------------------------------------------
 handle_info({route, From, _To, 
              {xmlelement, "message", _, _}=P}, State) ->
+    User = jlib:jid_to_string(
+             jlib:jid_tolower(
+               jlib:jid_remove_resource(From))),
     Subject = xml:get_path_s(P, [{elem, "subject"}, cdata]),
     Body= xml:get_path_s(P, [{elem, "body"}, cdata]),
-    Thread = xml:get_path_s(P, [{elem, "thread"}, cdata]),
-    PostID = mnesia:dirty_update_counter(sequence, tweet, 1),
-    mnesia:dirty_write(
-      #tweet{id=PostID,
-                 jid=jlib:jid_to_string(
-                       jlib:jid_tolower(
-                         jlib:jid_remove_resource(From))),
-                 subject=Subject,
-                 body=Body,
-                 thread=Thread,
-                 cdate=calendar:now_to_universal_time(now())}),
+    Db_Mod = State#state.db_mod,
+    Db_Mod:log_tweet(User,
+                     Subject,
+                     Body),
     {noreply, State};
 handle_info({route, From, To, {xmlelement, "iq", Attrs, _}=IQ}, State) ->
     ?DEBUG("got iq from ~s", [jlib:jid_to_string(From)]),
@@ -243,18 +228,8 @@ process(_, _Request) ->
 %%% Internal functions
 %%--------------------------------------------------------------------
 serve([Prefix | []], Query) ->
-    EList = case mnesia:dirty_read(sequence, tweet) of
-                [{sequence, tweet, LastID} | _] ->
-                    lists:foldl(
-                      fun(ID, List) ->
-                              List ++ 
-                                  mnesia:dirty_read(tweet, ID)
-                      end,
-                      [],
-                      lists:seq((LastID-?ITEMS_PER_PAGE*10)+1, LastID));
-                [] ->
-                    []
-            end,
+    Db_Mod = get_db_mod(),
+    EList = Db_Mod:get_posts([],[]),
     {xmlelement, "div", [{"class", "page"}], 
      [{xmlelement, "h2", [], 
        [{xmlcdata, "All Posts"}]},
@@ -269,7 +244,8 @@ serve([_Prefix, "about", JID | _], _Query) ->
        [{xmlcdata, "About "++JID}]}
      ]};
 serve([Prefix, JID | []], Query) ->
-    Posts = mnesia:dirty_index_read(tweet, JID, jid),
+    Db_Mod = get_db_mod(),
+    Posts = Db_Mod:get_posts(JID, []),
     {xmlelement, "div", [{"class", "page"}], 
      [{xmlelement, "h2", [],
        [{xmlcdata, "Posts by "},
@@ -291,9 +267,8 @@ serve([Prefix, JID | DatePath], Query) ->
           [], 
           %% make sure we do have at least 3 elements in list
           DatePath++["a","b"]), 
-    Posts = 
-        mnesia:dirty_match_object(
-          {tweet, '_', JID, '_', '_', '_', {{IYear, IMonth, IDay}, '_'}}),
+    Db_Mod = get_db_mod(),
+    Posts = Db_Mod:get_posts(JID, {IYear, IMonth, IDay}),
     {xmlelement, "div", [{"class", "page"}], 
      [{xmlelement, "h2", [],
        [{xmlcdata, "Posts by "},
@@ -469,4 +444,12 @@ handle_iq_get({From, To, IQ}, State) ->
               jlib:make_error_reply(
                 IQ, 
                 ?ERR_FEATURE_NOT_IMPLEMENTED))
+    end.
+
+get_db_mod() ->
+    case ets:lookup(mod_tweet_cfg, db_mod) of
+        [] ->
+            mod_tweets_mnesia;
+        [{db_mod, Db_Mod}] ->
+            Db_Mod
     end.
