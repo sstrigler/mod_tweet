@@ -25,8 +25,8 @@ init_db(Opts) ->
 
 log_tweet(User, Body) ->
     DBName = couch_escape(User),
-    case ecouch:db_info(DBName) of
-        {ok,{obj,[{"error",<<"not_found">>},{"reason",<<"missing">>}]}} ->
+    case db_exists(DBName) of
+        false ->
             ecouch:db_create(DBName);
         _ ->
             ok
@@ -58,25 +58,32 @@ get_tweets([],Date, Len, Offset) ->
     %% unsupported by now
     [];
 get_tweets(User, Date, Len, Offset) ->
-    lists:foldl(
-      fun({obj, Obj}, Acc) ->
-              {value, {"value", {obj, Doc}}} = lists:keysearch("value", 1, Obj),
-              Acc ++ [make_tweet(User, Doc)]
-      end,
-      [],
-      get_tweet_view_by_timestamp(User, Date, Len, Offset)).
-
-get_tweet_view_by_timestamp(User, Date, Len, Offset) ->
     DBName = couch_escape(User),
+    case db_exists(DBName) of
+        true ->
+            lists:foldl(
+              fun({obj, Obj}, Acc) ->
+                      {value, {"value", {obj, Doc}}} =
+                          lists:keysearch("value", 1, Obj),
+                      Acc ++ [make_tweet(User, Doc)]
+              end,
+              [],
+              get_tweet_view_by_timestamp(DBName, Date, Len, Offset));
+        _ ->
+            []
+    end.
+
+get_tweet_view_by_timestamp(DBName, Date, Len, Offset) ->
     case ecouch:doc_get(DBName, "_view/tweets/by_timestamp") of
         {ok,{obj,[{"error",<<"not_found">>},
                   {"reason",_}]}} ->
             case create_tweet_view(DBName) of 
-                {ok, {obj, Foo}} ->
-                    io:format("~p~n", [Foo]),
-                    get_tweet_view_by_timestamp(User, Date, Len, Offset);
+                {ok, {obj, [{"error", _E}, {"reason", _R}]}} ->
+                    [];
+                {ok, {obj, _Obj}} ->
+                    get_tweet_view_by_timestamp(DBName,
+                                                Date, Len, Offset);
                 _E ->
-                    io:format("~p~n", [_E]),
                     []
             end;
         {ok, {obj, Result}} ->
@@ -86,6 +93,16 @@ get_tweet_view_by_timestamp(User, Date, Len, Offset) ->
                 _ ->
                     []
             end
+    end.
+
+db_exists(DBName) ->
+    case ecouch:db_info(DBName) of
+        {ok, {obj, [{"error", _E},{"reason", _R}]}} ->
+            false;
+        {ok, {obj, _Obj}} ->
+            true;
+        _ ->
+            false
     end.
 
 create_tweet_view(DBName) ->
