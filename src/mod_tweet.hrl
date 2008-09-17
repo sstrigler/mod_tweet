@@ -7,4 +7,4 @@
 
 -define(ITEMS_PER_PAGE, 10).
 
--record(tweet, {id, jid, subject, body, cdate}).
+-record(tweet, {id, jid, body, cdate}).

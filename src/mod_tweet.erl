@@ -125,11 +125,9 @@ handle_info({route, From, _To,
     User = jlib:jid_to_string(
              jlib:jid_tolower(
                jlib:jid_remove_resource(From))),
-    Subject = xml:get_path_s(P, [{elem, "subject"}, cdata]),
     Body= xml:get_path_s(P, [{elem, "body"}, cdata]),
     Db_Mod = State#state.db_mod,
     Db_Mod:log_tweet(User,
-                     Subject,
                      Body),
     {noreply, State};
 handle_info({route, From, To, {xmlelement, "iq", Attrs, _}=IQ}, State) ->
@@ -229,7 +227,7 @@ process(_, _Request) ->
 %%--------------------------------------------------------------------
 serve([Prefix | []], Query) ->
     Db_Mod = get_db_mod(),
-    EList = Db_Mod:get_posts([],[]),
+    EList = Db_Mod:get_tweets(),
     {xmlelement, "div", [{"class", "page"}], 
      [{xmlelement, "h2", [], 
        [{xmlcdata, "All Posts"}]},
@@ -245,7 +243,7 @@ serve([_Prefix, "about", JID | _], _Query) ->
      ]};
 serve([Prefix, JID | []], Query) ->
     Db_Mod = get_db_mod(),
-    Posts = Db_Mod:get_posts(JID, []),
+    Posts = Db_Mod:get_tweets(JID),
     {xmlelement, "div", [{"class", "page"}], 
      [{xmlelement, "h2", [],
        [{xmlcdata, "Posts by "},
@@ -268,7 +266,7 @@ serve([Prefix, JID | DatePath], Query) ->
           %% make sure we do have at least 3 elements in list
           DatePath++["a","b"]), 
     Db_Mod = get_db_mod(),
-    Posts = Db_Mod:get_posts(JID, {IYear, IMonth, IDay}),
+    Posts = Db_Mod:get_tweets(JID, {IYear, IMonth, IDay}),
     {xmlelement, "div", [{"class", "page"}], 
      [{xmlelement, "h2", [],
        [{xmlcdata, "Posts by "},
@@ -350,9 +348,7 @@ xml_tweets(EList, Prefix, Query) ->
 xml_tweet(E, Prefix) ->
     {{Year, Month, Day},_} = E#tweet.cdate,
     {xmlelement, "div", [{"class", "post"}],
-     [{xmlelement, "h3", [{"class", "post_title"}], 
-       [{xmlcdata, E#tweet.subject}]},
-      {xmlelement, "div", [{"class", "post_content"}], 
+     [{xmlelement, "div", [{"class", "post_content"}], 
        [{xmlcdata, E#tweet.body}]},
       {xmlelement, "div", [{"class", "post_meta"}],
        [{xmlcdata, "Posted by "},
