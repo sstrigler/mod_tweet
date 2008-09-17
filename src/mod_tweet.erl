@@ -78,7 +78,7 @@ stop(Host) ->
 init([Host, Opts]) ->
     MyHost = gen_mod:get_opt(host, Opts, "tweet." ++ Host),
     Db_Mod = gen_mod:get_opt(db_mod, Opts, mod_tweet_mnesia),
-    Db_Mod:init_db(),
+    Db_Mod:init_db(Opts),
     case catch ets:new(mod_tweet_cfg, [named_table, public]) of
         _ ->
             ok

@@ -10,7 +10,7 @@
 -vsn('0.1'). 
 
 -include("mod_tweet.hrl").
--export([init_db/0,
+-export([init_db/1,
          log_tweet/2,
          get_tweets/0,
          get_tweets/1,
@@ -21,7 +21,7 @@
 
 -record(sequence, {key, index}).
 
-init_db() ->
+init_db(_Opts) ->
     %% create table for all posts
     mnesia:create_table(tweet,
                         [{type, set},
