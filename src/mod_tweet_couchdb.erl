@@ -70,7 +70,7 @@ get_tweet_view_by_timestamp(User, Date, Len, Offset) ->
     DBName = couch_escape(User),
     case ecouch:doc_get(DBName, "_view/tweets/by_timestamp") of
         {ok,{obj,[{"error",<<"not_found">>},
-                  {"reason",<<"missing_named_view">>}]}} ->
+                  {"reason",_}]}} ->
             case create_tweet_view(DBName) of 
                 {ok, {obj, Foo}} ->
                     io:format("~p~n", [Foo]),
@@ -89,7 +89,15 @@ get_tweet_view_by_timestamp(User, Date, Len, Offset) ->
     end.
 
 create_tweet_view(DBName) ->
-    {error, not_implemented}.
+    JSONDoc = {obj, [{"language", <<"javascript">>},
+                     {"views", 
+                      {obj, [{"by_timestamp", 
+                              {obj, [{"map", <<"function(doc) { if (doc.Type == 'tweet') emit(doc.timestamp, doc); }">> }]}
+                             }]
+                      }
+                     }
+                    ]},
+    ecouch:doc_create(DBName, "_design/tweets", JSONDoc).
 
 
 couch_escape(List) ->
