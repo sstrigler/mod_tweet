@@ -32,6 +32,7 @@
 -include("ejabberd_http.hrl").
 
 -record(state, {host, db_mod}).
+-record(mod_tweet_presence, {jid, presence}).
 
 -define(PROCNAME, ?MODULE).
 
@@ -47,6 +48,14 @@ start_link(Host, Opts) ->
     gen_server:start_link({local, Proc}, ?MODULE, [Host, Opts], []).
 
 start(Host, Opts) ->
+    mnesia:create_table(
+      mod_tweet_presence,
+      [{ram_copies, [node()]},
+       {attributes, record_info(
+                      fields,
+                      mod_tweet_presence)}]
+     ),
+
     Proc = gen_mod:get_module_proc(Host, ?PROCNAME),
     ChildSpec =
 	{Proc,
@@ -150,6 +159,11 @@ handle_info({route, From, To, {xmlelement, "iq", Attrs, _}=IQ}, State) ->
             nok
     end,
     {noreply, State};
+handle_info({route, From, To, 
+             {xmlelement, "presence", _, _}=Packet}, State) ->
+    handle_presence(From, To, Packet),
+    {noreply, State};
+%% TODO send error-reply for bad jid
 handle_info(_Info, State) ->
     {noreply, State}.
 
@@ -440,6 +454,65 @@ handle_iq_get({From, To, IQ}, State) ->
               jlib:make_error_reply(
                 IQ, 
                 ?ERR_FEATURE_NOT_IMPLEMENTED))
+    end.
+
+handle_presence(From, To, Packet) ->
+    FromS = jlib:jid_to_string(
+              jlib:jid_tolower(
+                jlib:jid_remove_resource(From))),
+    Type = xml:get_tag_attr_s("type", Packet),
+    case Type of 
+        "subscribe" ->
+            %% send back subscription
+            {xmlelement, "presence", Attrs, _} = 
+                xml:replace_tag_attr("type", "subscribed", Packet),
+            ejabberd_router:route(
+              To,
+              From,
+              jlib:replace_from_to(
+                To, 
+                From, 
+                {xmlelement, "presence", Attrs, []})
+             );
+        "unsubscribe" ->
+            mnesia:dirty_delete(mod_tweet_presence, FromS),
+            %% send back unsubscribe response
+            {xmlelement, "presence", Attrs, _} = 
+                xml:replace_tag_attr("type", "unsubscribed", Packet),
+            ejabberd_router:route(
+              To,
+              From,
+              jlib:replace_from_to(
+                To, 
+                From, 
+                {xmlelement, "presence", Attrs, []})
+	     );
+        "unavailable" ->
+            mnesia:dirty_delete(mod_tweet_presence, FromS);
+        _ ->
+            case mnesia:dirty_read(mod_tweet_presence, FromS) of 
+                [] -> 
+                    %%  no presence yet, send back own presence
+                    ejabberd_router:route(
+                      To,
+                      From,
+                      {xmlelement, 
+                       "presence", 
+                       [{"to", jlib:jid_to_string(From)}, 
+                        {"from", jlib:jid_to_string(To)}], []});
+                _ ->
+                    ok
+            end,
+            P = case xml:get_subtag_cdata(Packet, "show") of
+                    "" ->
+                        "available";
+                    Show ->
+                        Show
+                end,
+            mnesia:dirty_write(mod_tweet_presence, 
+                               #mod_tweet_presence{
+                                 jid=FromS, 
+                                 presence=P})
     end.
 
 get_db_mod() ->
